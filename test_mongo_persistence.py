@@ -480,6 +480,30 @@ class MongoPersistenceTests(unittest.TestCase):
             "start-banner-reference",
         )
 
+    def test_editable_terms_settings_persist_without_changing_terms_url(self):
+        database = FakeDatabase()
+        repository = MongoRepository(database)
+        repository.prepare()
+        store = MongoRuntimeStore(repository)
+
+        store.set_setting("terms_url", "https://example.test/terms")
+        store.set_setting("editable_terms_text", "Exact T&C text <keep>")
+        store.set_setting(
+            "editable_terms_banner_file_id",
+            '{"id": 123, "access_hash": 456, "file_reference": "00"}',
+        )
+
+        restarted_store = MongoRuntimeStore(MongoRepository(database))
+        self.assertEqual(restarted_store.get_setting("terms_url"), "https://example.test/terms")
+        self.assertEqual(
+            restarted_store.get_setting("editable_terms_text"),
+            "Exact T&C text <keep>",
+        )
+        self.assertEqual(
+            restarted_store.get_setting("editable_terms_banner_file_id"),
+            '{"id": 123, "access_hash": 456, "file_reference": "00"}',
+        )
+
     def test_bot_runtime_does_not_initialize_sqlite(self):
         source = Path("james.py").read_text(encoding="utf-8")
         self.assertNotIn("import sqlite3", source)
@@ -767,6 +791,9 @@ class MongoPersistenceTests(unittest.TestCase):
 
         self.assertTrue(store.transition_deposit(deposit["_id"], "pending", "rejected"))
         self.assertFalse(store.transition_deposit(deposit["_id"], "pending", "rejected"))
+        self.assertEqual(store.get_deposit(deposit["_id"])["status"], "rejected")
+        self.assertEqual(store.get_balance(27), 0)
+        self.assertEqual(store.approve_deposit(deposit["_id"], 80)["status"], "processed")
         self.assertEqual(store.get_deposit(deposit["_id"])["status"], "rejected")
 
     def test_upi_order_creation_is_idempotent_and_conflict_safe(self):
