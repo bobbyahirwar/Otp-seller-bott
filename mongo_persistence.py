@@ -212,6 +212,7 @@ INDEX_DEFINITIONS = {
                 ("account_year", 1),
                 ("category", 1),
                 ("price", 1),
+                ("data_center", 1),
             ),
         ),
     ),
