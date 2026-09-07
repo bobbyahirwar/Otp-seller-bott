@@ -212,7 +212,6 @@ INDEX_DEFINITIONS = {
                 ("account_year", 1),
                 ("category", 1),
                 ("price", 1),
-                ("data_center", 1),
             ),
         ),
     ),
@@ -696,6 +695,25 @@ class MongoRuntimeStore:
             return None
         return str(value)
 
+    @staticmethod
+    def _normalise_inventory_text(value: Any) -> str:
+        return "" if value is None else str(value).strip()
+
+    @staticmethod
+    def _numeric_variants(value: Any) -> list[Any]:
+        numeric = int(value)
+        return [numeric, str(numeric)]
+
+    @classmethod
+    def inventory_group_key(cls, document: Mapping[str, Any]) -> tuple[Any, ...]:
+        """Return the inventory identity; data center is display metadata only."""
+        return (
+            cls._normalise_inventory_text(document.get("country_name")),
+            cls._normalise_inventory_text(document.get("category")),
+            int(document.get("account_year")) if document.get("account_year") is not None else None,
+            int(document.get("price") or 0),
+        )
+
     @classmethod
     def inventory_filter(
         cls,
@@ -711,20 +729,24 @@ class MongoRuntimeStore:
         if country is not None:
             country_text = str(country)
             pattern = (
-                f"^{re.escape(country_text)}"
+                f"^\\s*{re.escape(country_text.strip())}"
                 if country_prefix
-                else f"^{re.escape(country_text)}$"
+                else f"^\\s*{re.escape(country_text.strip())}\\s*$"
             )
             filters["country_name"] = {"$regex": pattern, "$options": "i"}
         if year is not None:
-            filters["account_year"] = int(year)
+            filters["account_year"] = {"$in": cls._numeric_variants(year)}
         if price is not None:
-            filters["price"] = int(price)
+            filters["price"] = {"$in": cls._numeric_variants(price)}
         if available is not None:
             filters["available"] = int(available)
 
         category_text = "" if category is None else str(category).strip()
-        filters["category"] = category_text if category_text else {"$in": [None, ""]}
+        filters["category"] = (
+            {"$regex": f"^\\s*{re.escape(category_text)}\\s*$"}
+            if category_text
+            else {"$in": [None, ""]}
+        )
 
         normalised_dc = cls._normalise_inventory_dc(dc)
         filters["data_center"] = (
@@ -746,17 +768,10 @@ class MongoRuntimeStore:
         """Return the grouped product shape used by the Telegram store."""
         groups: dict[tuple[Any, ...], dict[str, Any]] = {}
         for document in self.inventory.find({"available": 1}):
-            category = document.get("category") or ""
+            category = self._normalise_inventory_text(document.get("category"))
             dc = self._normalise_inventory_dc(document.get("data_center"))
-            icon = document.get("country_icon") or "🌍"
-            key = (
-                document.get("country_name"),
-                icon,
-                category,
-                document.get("account_year"),
-                int(document.get("price") or 0),
-                dc,
-            )
+            icon = document.get("country_icon") or ""
+            key = self.inventory_group_key(document)
             product = groups.get(key)
             if product is None:
                 product = {
@@ -890,8 +905,7 @@ class MongoRuntimeStore:
         )
         if match_any_category:
             filters.pop("category", None)
-        if match_any_dc:
-            filters.pop("data_center", None)
+        filters.pop("data_center", None)
         return self.inventory.find_one_and_update(
             filters,
             {"$set": {"available": 0}},

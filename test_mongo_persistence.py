@@ -989,21 +989,95 @@ class MongoPersistenceTests(unittest.TestCase):
         store.save_inventory(self.inventory_document("9199990004", available=0))
 
         products = store.inventory_products()
-        self.assertEqual(len(products), 2)
-        self.assertEqual({product["dc"] for product in products}, {None, "dc2"})
-        self.assertEqual(store.count_inventory(
-            store.inventory_filter(
-                country="India",
-                year=2024,
-                price=100,
-                category="Good",
-                dc=None,
-                available=1,
-                country_prefix=False,
-            )
-        ), 1)
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]["stock"], 2)
+        filters = store.inventory_filter(
+            country="India",
+            year=2024,
+            price=100,
+            category="Good",
+            available=1,
+            country_prefix=False,
+        )
+        filters.pop("data_center", None)
+        self.assertEqual(store.count_inventory(filters), 2)
         self.assertEqual(store.list_inventory_countries(), ["India"])
         self.assertEqual(store.list_inventory_years("India"), [2024])
+
+    def test_inventory_grouping_uses_only_country_condition_year_and_price(self):
+        _database, store = self.make_store()
+        cases = [
+            ("9199990101", "India", "Good", 2024, 100, "dc1"),
+            ("9199990102", "India", "Good", 2024, 100, "dc2"),
+            ("9199990103", "India", "Bad", 2024, 100, "dc1"),
+            ("9199990104", "India", "Good", 2023, 100, "dc1"),
+            ("9199990105", "India", "Good", 2024, 101, "dc1"),
+            ("9199990106", "USA", "Good", 2024, 100, "dc1"),
+        ]
+        for phone, country, category, year, price, dc in cases:
+            document = self.inventory_document(phone, category=category, dc=dc, price=price)
+            document["country_name"] = country
+            document["account_year"] = year
+            store.save_inventory(document)
+
+        products = store.inventory_products()
+        self.assertEqual(len(products), 5)
+        self.assertEqual(
+            sorted(product["stock"] for product in products),
+            [1, 1, 1, 1, 2],
+        )
+
+    def test_inventory_grouping_normalises_whitespace_and_numeric_values(self):
+        _database, store = self.make_store()
+        first = self.inventory_document("9199990111", dc="dc1", price=15)
+        second = self.inventory_document("9199990112", dc="dc2", price=15.0)
+        second["country_name"] = " India "
+        second["category"] = " Good "
+        second["account_year"] = "2024"
+        first["account_year"] = 2024
+        store.save_inventory(first)
+        store.save_inventory(second)
+
+        products = store.inventory_products()
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]["stock"], 2)
+        self.assertEqual(
+            len(store.reserve_inventory(1, "India", 2024, 15, "Good")),
+            1,
+        )
+        self.assertEqual(store.count_inventory({"available": 1}), 1)
+
+    def test_inventory_grouping_does_not_invent_country_emoji(self):
+        _database, store = self.make_store()
+        document = self.inventory_document("9199990113")
+        document.pop("country_icon")
+        store.save_inventory(document)
+
+        products = store.inventory_products()
+        self.assertEqual(products[0]["icon"], "")
+        self.assertEqual(products[0]["country"], "India")
+
+    def test_purchase_reservation_consumes_any_dc_in_group(self):
+        _database, store = self.make_store()
+        for index, dc in enumerate(("dc5", "dc4", "dc1"), start=1):
+            store.save_inventory(
+                self.inventory_document(f"919999012{index}", dc=dc)
+            )
+
+        products = store.inventory_products()
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0]["stock"], 3)
+
+        reserved = store.reserve_inventory_item(
+            "India", 2024, 100, "Good", dc="dc5"
+        )
+        self.assertIsNotNone(reserved)
+        self.assertEqual(store.count_inventory({"available": 1}), 2)
+        self.assertEqual(
+            store.reserve_inventory_item("India", 2024, 100, "Good", dc="dc5")["phone"],
+            "9199990122",
+        )
+        self.assertEqual(store.count_inventory({"available": 1}), 1)
 
     def test_auto_price_crud_and_upsert(self):
         _database, store = self.make_store()
