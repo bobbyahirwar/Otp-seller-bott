@@ -2497,6 +2497,7 @@ async def admin_panel_handler(event):
         btns.append([Button.inline("📝 Set Welcome Msg", "adm_welcome"), Button.inline("🖼️ Banner Images", "adm_banner")])
         btns.append([Button.inline("📜 Editable T&C", "adm_terms_content")])
         btns.append([Button.inline("📝 Store Messages", "adm_store_messages"), Button.inline("⚙️ Store Buttons", "adm_store_buttons")])
+        btns.append([Button.inline("📦 Account Store Order", "adm_store_order")])
         btns.append([Button.inline("Support URL", "adm_supporturl"), Button.inline("Payments", "adm_payments")])
         btns.append([Button.inline("💳 Payment Methods", "adm_payment_methods")])
         btns.append([Button.inline("👑 Owner", "adm_setting_edit|owner_username")])
@@ -2998,6 +2999,68 @@ async def store_button_editor(event, flow):
     rows.append([Button.inline("↩️ Back", "adm_store_buttons")])
     return await event.edit(f"⚙️ <b>{name} Store Buttons</b>\n\nSelect a label to edit.", buttons=rows)
 
+
+async def account_store_order_menu(event, page=1):
+    products = get_available_account_products()
+    limit = 10
+    total_pages = max(1, (len(products) + limit - 1) // limit)
+    page = min(max(int(page), 1), total_pages)
+    offset = (page - 1) * limit
+    page_products = products[offset:offset + limit]
+    buttons = []
+
+    for position, product in enumerate(page_products, start=offset + 1):
+        label = (
+            f"{position}. {product.get('icon') or ''} "
+            f"{html.escape(str(product.get('country') or 'Unknown'))} • "
+            f"{html.escape(str(product.get('category') or 'Standard'))} • "
+            f"{html.escape(str(product.get('year') or ''))} • "
+            f"${to_usd(product.get('price') or 0):.2f}"
+        )
+        buttons.append([Button.inline(label, "adm_store_order_noop")])
+        controls = []
+        token = get_product_token(product)
+        if position > 1:
+            controls.append(Button.inline("⬆️", f"adm_store_order|up|{token}|{page}"))
+        if position < len(products):
+            controls.append(Button.inline("⬇️", f"adm_store_order|down|{token}|{page}"))
+        if controls:
+            buttons.append(controls)
+
+    navigation = []
+    if page > 1:
+        navigation.append(Button.inline("◀️", f"adm_store_order_page|{page - 1}"))
+    if total_pages > 1:
+        navigation.append(Button.inline(f"Page {page}/{total_pages}", "adm_store_order_noop"))
+    if page < total_pages:
+        navigation.append(Button.inline("▶️", f"adm_store_order_page|{page + 1}"))
+    if navigation:
+        buttons.append(navigation)
+    buttons.append([Button.inline("🔙 Back", "adm_adminmain")])
+
+    heading = "📦 <b>Account Store Order</b>"
+    if not products:
+        heading += "\n\nNo stock groups are currently available."
+    return await event.edit(heading, buttons=buttons)
+
+
+async def move_account_store_product(event, direction, token, page):
+    products = get_available_account_products()
+    product_ids = [get_product_token(product) for product in products]
+    try:
+        index = product_ids.index(token)
+    except ValueError:
+        await event.answer("This stock group is no longer available.", alert=True)
+        return await account_store_order_menu(event, page)
+
+    target = index - 1 if direction == "up" else index + 1
+    if target < 0 or target >= len(product_ids):
+        return await account_store_order_menu(event, page)
+
+    product_ids[index], product_ids[target] = product_ids[target], product_ids[index]
+    set_account_store_order(product_ids)
+    return await account_store_order_menu(event, page)
+
 async def preview_store(event, flow):
     class PreviewEvent:
         sender_id = event.sender_id
@@ -3071,6 +3134,35 @@ async def admin_actions(event):
         if not has_perm(uid, 'p_settings'):
             return await event.answer("Not authorized.", alert=True)
         return await payment_methods_menu(event)
+
+    if action_data == "store_order":
+        if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
+            return await event.answer("Not authorized.", alert=True)
+        return await account_store_order_menu(event)
+
+    if action_data == "store_order_noop":
+        return await event.answer()
+
+    if action_data.startswith("store_order_page|"):
+        if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
+            return await event.answer("Not authorized.", alert=True)
+        try:
+            page = int(action_data.split("|", 1)[1])
+        except (TypeError, ValueError):
+            return await event.answer("Invalid page.", alert=True)
+        return await account_store_order_menu(event, page)
+
+    if action_data.startswith("store_order|"):
+        if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
+            return await event.answer("Not authorized.", alert=True)
+        parts = action_data.split("|")
+        if len(parts) != 4 or parts[1] not in {"up", "down"}:
+            return await event.answer("Invalid order action.", alert=True)
+        try:
+            page = int(parts[3])
+        except (TypeError, ValueError):
+            return await event.answer("Invalid page.", alert=True)
+        return await move_account_store_product(event, parts[1], parts[2], page)
 
     if action_data == "terms_content":
         return await editable_terms_menu(event)

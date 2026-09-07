@@ -1,6 +1,7 @@
 import os
+import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("API_ID", "1")
 os.environ.setdefault("API_HASH", "test-hash")
@@ -47,6 +48,7 @@ class AccountStoreOrderingTests(unittest.TestCase):
     @staticmethod
     def product(country, category, year, price, dc):
         return {
+            "icon": "🇺🇸" if country == "USA" else "🇮🇳",
             "country": country,
             "category": category,
             "year": year,
@@ -108,6 +110,50 @@ class AccountStoreOrderingTests(unittest.TestCase):
         james.set_account_store_order([james.get_product_token(first)])
         ordered = james.order_account_store_products([second])
         self.assertEqual(james.get_product_token(ordered[0]), james.get_product_token(first))
+
+    def test_admin_order_menu_shows_current_order_and_boundary_controls(self):
+        first = self.product("USA", "Spammed", 2025, 20, "dc5")
+        second = self.product("USA", "Non Spam", 2025, 39, "dc4")
+        first_id = james.get_product_token(first)
+        second_id = james.get_product_token(second)
+        james.set_account_store_order([second_id, first_id])
+        event = type("Event", (), {"edit": AsyncMock(), "answer": AsyncMock()})()
+
+        with patch.object(james, "get_available_account_products", return_value=[second, first]):
+            asyncio.run(james.account_store_order_menu(event))
+
+        rendered_buttons = event.edit.await_args.kwargs["buttons"]
+        labels = [row[0].text for row in (rendered_buttons[0], rendered_buttons[2])]
+        self.assertIn("1. 🇺🇸 USA • Non Spam • 2025", labels[0])
+        self.assertIn("2. 🇺🇸 USA • Spammed • 2025", labels[1])
+        self.assertEqual(len(rendered_buttons[1]), 1)
+        self.assertEqual(len(rendered_buttons[3]), 1)
+
+    def test_admin_move_up_and_down_persist_swaps(self):
+        products = [
+            self.product("USA", "Spammed", 2025, 20, "dc5"),
+            self.product("USA", "Non Spam", 2025, 39, "dc4"),
+            self.product("India", "Spammed", 2025, 15, "dc1"),
+        ]
+        ids = [james.get_product_token(product) for product in products]
+        james.set_account_store_order(ids)
+        event = type("Event", (), {"edit": AsyncMock(), "answer": AsyncMock()})()
+
+        ordered_products = lambda: james.order_account_store_products(products)
+        with patch.object(james, "get_available_account_products", side_effect=ordered_products):
+            asyncio.run(james.move_account_store_product(event, "up", ids[1], 1))
+        self.assertEqual(james.get_account_store_order(), [ids[1], ids[0], ids[2]])
+
+        with patch.object(james, "get_available_account_products", side_effect=ordered_products):
+            asyncio.run(james.move_account_store_product(event, "down", ids[1], 1))
+        self.assertEqual(james.get_account_store_order(), ids)
+
+        with patch.object(james, "get_available_account_products", side_effect=ordered_products):
+            asyncio.run(james.move_account_store_product(event, "up", ids[0], 1))
+        self.assertEqual(james.get_account_store_order(), ids)
+        with patch.object(james, "get_available_account_products", side_effect=ordered_products):
+            asyncio.run(james.move_account_store_product(event, "down", ids[2], 1))
+        self.assertEqual(james.get_account_store_order(), ids)
 
 
 if __name__ == "__main__":
