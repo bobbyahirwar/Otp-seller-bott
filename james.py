@@ -1736,7 +1736,8 @@ def approve_deposit(deposit_id, amount):
 
 # ================= BUYING FLOW =================
 def get_available_account_products():
-    return mongo_store.inventory_products()
+    products = mongo_store.inventory_products()
+    return order_account_store_products(products)
 
 
 def get_product_stock(product):
@@ -1761,6 +1762,52 @@ def get_product_token(product):
         int(product.get("price") or 0),
     )
     return hashlib.sha256(json.dumps(identity, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()[:16]
+
+
+ACCOUNT_STORE_ORDER_SETTING = "account_store_order"
+
+
+def get_account_store_order():
+    raw_order = get_setting(ACCOUNT_STORE_ORDER_SETTING, "[]")
+    try:
+        order = json.loads(raw_order) if isinstance(raw_order, str) else raw_order
+    except (TypeError, ValueError):
+        order = []
+    if not isinstance(order, list):
+        return []
+    return [str(item) for item in order if item is not None]
+
+
+def set_account_store_order(product_ids):
+    ordered_ids = []
+    seen = set()
+    for product_id in product_ids or []:
+        product_id = str(product_id)
+        if product_id not in seen:
+            ordered_ids.append(product_id)
+            seen.add(product_id)
+    set_setting(ACCOUNT_STORE_ORDER_SETTING, json.dumps(ordered_ids, separators=(",", ":")))
+
+
+def order_account_store_products(products):
+    products_by_id = {
+        get_product_token(product): product
+        for product in products
+    }
+    persisted_order = get_account_store_order()
+    ordered_ids = [
+        product_id
+        for product_id in persisted_order
+        if product_id in products_by_id
+    ]
+    ordered_ids.extend(
+        product_id
+        for product_id in products_by_id
+        if product_id not in ordered_ids
+    )
+    if ordered_ids != persisted_order:
+        set_account_store_order(ordered_ids)
+    return [products_by_id[product_id] for product_id in ordered_ids]
 
 
 def resolve_product(token):
