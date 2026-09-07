@@ -349,6 +349,49 @@ class MongoPersistenceTests(unittest.TestCase):
             [call["name"] for call in users.create_index_calls],
         )
 
+    def test_prepare_reuses_legacy_inventory_query_index_without_mutating_data(self):
+        database = FakeDatabase()
+        inventory = database["inventory"]
+        inventory.documents.append({
+            "_id": "inventory-1",
+            "phone": "+9199990000",
+            "available": 1,
+            "country_name": "India",
+            "account_year": 2024,
+            "category": "Good",
+            "price": 100,
+            "data_center": "dc1",
+        })
+        inventory.indexes.append({
+            "name": "inventory_available_product",
+            "key": {
+                "available": 1,
+                "country_name": 1,
+                "account_year": 1,
+                "category": 1,
+                "price": 1,
+                "data_center": 1,
+            },
+            "unique": False,
+        })
+        before = [document.copy() for document in inventory.documents]
+
+        report = MongoRepository(database).prepare()
+
+        self.assertEqual(report["indexes"]["inventory"]["errors"], [])
+        self.assertIn(
+            "inventory_available_product",
+            report["indexes"]["inventory"]["verified"],
+        )
+        self.assertEqual(inventory.documents, before)
+        self.assertEqual(
+            len([
+                index for index in inventory.indexes
+                if index["name"] == "inventory_available_product"
+            ]),
+            1,
+        )
+
     def test_duplicate_unique_keys_are_reported_and_index_is_not_created(self):
         database = FakeDatabase()
         collection = database["inventory"]
