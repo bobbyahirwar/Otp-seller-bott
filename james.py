@@ -1741,27 +1741,23 @@ def get_available_account_products():
 
 def get_product_stock(product):
     category = normalize_optional_text(product.get("category"))
-    dc = product.get("dc")
-    if dc is not None and str(dc).strip().lower() in {"none", "null", ""}:
-        dc = None
     filters = mongo_store.inventory_filter(
         country=product["country"],
         year=product["year"],
         price=product["price"],
         category=category,
-        dc=dc,
         available=1,
         country_prefix=False,
     )
+    filters.pop("data_center", None)
     return mongo_store.count_inventory(filters)
 
 
 def get_product_token(product):
     identity = (
-        product.get("country") or "",
+        str(product.get("country") or "").strip(),
         normalize_optional_text(product.get("category")),
-        product.get("dc") or "",
-        product.get("year"),
+        int(product.get("year")) if product.get("year") is not None else None,
         int(product.get("price") or 0),
     )
     return hashlib.sha256(json.dumps(identity, separators=(",", ":"), ensure_ascii=True).encode()).hexdigest()[:16]
