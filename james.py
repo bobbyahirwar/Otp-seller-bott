@@ -1972,8 +1972,7 @@ def build_account_store_product_detail_lines(product, stock=None):
     return lines
 
 
-def render_account_store_product_message(product):
-    stock = get_product_stock(product)
+def render_account_store_listing_message(product):
     custom_message = get_account_store_message(product)
     if custom_message:
         values = build_account_store_message_values(product)
@@ -1981,6 +1980,11 @@ def render_account_store_product_message(product):
             return custom_message.format(**values)
         except Exception:
             pass
+    return format_store_product_line(product)
+
+
+def render_account_store_product_message(product):
+    stock = get_product_stock(product)
     return "\n".join(build_account_store_product_detail_lines(product, stock))
 
 
@@ -3298,8 +3302,7 @@ async def admin_actions(event):
         product = resolve_product(token)
         if not product:
             return await event.answer("This stock group is no longer available.", alert=True)
-        custom_message = get_account_store_message(token)
-        preview = custom_message or render_account_store_product_message(product)
+        preview = render_account_store_listing_message(product)
         admin_content_state[uid] = {"type": "account_store_message", "token": token}
         return await event.edit(
             "✏️ <b>Edit Account Store Message</b>\n\n"
