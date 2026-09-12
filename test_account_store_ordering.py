@@ -199,19 +199,54 @@ class AccountStoreOrderingTests(unittest.TestCase):
             token: "📦 {country} ({condition})\n💰 {price} (₹{price_inr})\n📦 Stock: {stock}\n🖥 {data_center}"
         })
 
-        rendered = james.render_account_store_product_message(product)
+        rendered = james.render_account_store_listing_message(product)
         self.assertIn("📦 USA (Spammed)", rendered)
         self.assertIn("💰 $0.21 (₹20)", rendered)
         self.assertIn("📦 Stock: 1", rendered)
         self.assertIn("🖥 dc5", rendered)
 
-    def test_account_store_custom_message_falls_back_to_default_when_missing(self):
+    def test_admin_account_store_message_edit_uses_listing_message_not_purchase_details(self):
         product = self.product("USA", "Spammed", 2025, 20, "dc5")
+        token = james.get_product_token(product)
+        event = type(
+            "Event",
+            (),
+            {
+                "sender_id": 1,
+                "chat_id": 1,
+                "data": f"adm_account_store_message_edit|{token}".encode(),
+                "edit": AsyncMock(),
+                "answer": AsyncMock(),
+            },
+        )()
+
+        with patch.object(james, "get_available_account_products", return_value=[product]):
+            asyncio.run(james.admin_actions(event))
+
+        preview = event.edit.await_args.args[0]
+        self.assertIn("Current message/card text:", preview)
+        self.assertIn("• USA (Spammed) (dc dc5) 2025: $0.21 (₹20) - Stock: 1", preview)
+        self.assertNotIn("PRODUCT DETAILS", preview)
+
+    def test_account_store_custom_message_does_not_change_purchase_flow_message(self):
+        product = self.product("USA", "Spammed", 2025, 20, "dc5")
+        token = james.get_product_token(product)
+
+        james.set_account_store_messages({
+            token: "📦 {country} ({condition})\n💰 {price} (₹{price_inr})\n📦 Stock: {stock}\n🖥 {data_center}"
+        })
 
         rendered = james.render_account_store_product_message(product)
-        self.assertIn("<b>Country:</b>", rendered)
+        self.assertIn("<b>PRODUCT DETAILS</b>", rendered)
         self.assertIn("<b>Price:</b>", rendered)
-        self.assertIn("<b>Available:</b>", rendered)
+        self.assertNotIn("📦 USA (Spammed)", rendered)
+
+    def test_account_store_default_listing_message_falls_back_to_listing_card(self):
+        product = self.product("USA", "Spammed", 2025, 20, "dc5")
+
+        rendered = james.render_account_store_listing_message(product)
+        self.assertIn("• USA (Spammed) (dc dc5) 2025: $0.21 (₹20) - Stock: 1", rendered)
+        self.assertNotIn("PRODUCT DETAILS", rendered)
 
 
 if __name__ == "__main__":
