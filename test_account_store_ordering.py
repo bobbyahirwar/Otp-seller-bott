@@ -155,6 +155,64 @@ class AccountStoreOrderingTests(unittest.TestCase):
             asyncio.run(james.move_account_store_product(event, "down", ids[2], 1))
         self.assertEqual(james.get_account_store_order(), ids)
 
+    def test_admin_account_store_messages_menu_uses_existing_order(self):
+        first = self.product("USA", "Spammed", 2025, 20, "dc5")
+        second = self.product("USA", "Non Spam", 2025, 39, "dc4")
+        first_id = james.get_product_token(first)
+        second_id = james.get_product_token(second)
+        james.set_account_store_order([second_id, first_id])
+        event = type("Event", (), {"edit": AsyncMock(), "answer": AsyncMock()})()
+
+        with patch.object(james, "get_available_account_products", return_value=[second, first]):
+            asyncio.run(james.account_store_messages_menu(event))
+
+        buttons = event.edit.await_args.kwargs["buttons"]
+        rendered = [button.text for row in buttons for button in row]
+        self.assertIn("1️⃣ 🇺🇸 USA • Non Spam • 2025 • $0.41", rendered)
+        self.assertIn("2️⃣ 🇺🇸 USA • Spammed • 2025 • $0.21", rendered)
+        self.assertIn(f"✏️ Edit", rendered)
+
+    def test_account_store_custom_message_persists_by_stable_token_and_survives_reorder(self):
+        spammed = self.product("USA", "Spammed", 2025, 20, "dc5")
+        non_spam = self.product("USA", "Non Spam", 2025, 39, "dc4")
+        spammed_id = james.get_product_token(spammed)
+        non_spam_id = james.get_product_token(non_spam)
+
+        james.set_account_store_order([non_spam_id, spammed_id])
+        james.set_account_store_messages({spammed_id: "Custom spammed message"})
+
+        self.assertEqual(james.get_account_store_message(spammed), "Custom spammed message")
+        self.assertIsNone(james.get_account_store_message(non_spam))
+
+        james.mongo_store = MongoRuntimeStore(MongoRepository(self.database))
+        self.assertEqual(james.get_account_store_messages()[spammed_id], "Custom spammed message")
+        self.assertEqual(
+            [item["category"] for item in james.order_account_store_products([spammed, non_spam])],
+            ["Non Spam", "Spammed"],
+        )
+
+    def test_account_store_custom_message_uses_current_dynamic_placeholders(self):
+        product = self.product("USA", "Spammed", 2025, 20, "dc5")
+        token = james.get_product_token(product)
+
+        james.set_account_store_messages({
+            token: "📦 {country} ({condition})\n💰 {price} (₹{price_inr})\n📦 Stock: {stock}\n🖥 {data_center}"
+        })
+
+        rendered = james.render_account_store_product_message(product)
+        self.assertIn("📦 USA (Spammed)", rendered)
+        self.assertIn("💰 $0.21 (₹20)", rendered)
+        self.assertIn("📦 Stock: 1", rendered)
+        self.assertIn("🖥 dc5", rendered)
+
+    def test_account_store_custom_message_falls_back_to_default_when_missing(self):
+        product = self.product("USA", "Spammed", 2025, 20, "dc5")
+
+        rendered = james.render_account_store_product_message(product)
+        self.assertIn("<b>Country:</b>", rendered)
+        self.assertIn("<b>Price:</b>", rendered)
+        self.assertIn("<b>Available:</b>", rendered)
+
 
 if __name__ == "__main__":
     unittest.main()

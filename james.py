@@ -1844,6 +1844,146 @@ def get_product_button_label(product):
     return label
 
 
+ACCOUNT_STORE_MESSAGES_SETTING = "account_store_messages"
+ACCOUNT_STORE_MESSAGE_PLACEHOLDERS = {
+    "country",
+    "condition",
+    "year",
+    "price",
+    "price_inr",
+    "stock",
+    "data_center",
+}
+
+
+def get_account_store_messages():
+    raw = get_setting(ACCOUNT_STORE_MESSAGES_SETTING, "{}")
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, ValueError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(key): str(value)
+        for key, value in data.items()
+        if key is not None and isinstance(value, str)
+    }
+
+
+def set_account_store_messages(messages):
+    cleaned = {
+        str(key): str(value)
+        for key, value in (messages or {}).items()
+        if key is not None and isinstance(value, str)
+    }
+    set_setting(ACCOUNT_STORE_MESSAGES_SETTING, json.dumps(cleaned, ensure_ascii=False))
+    return cleaned
+
+
+def get_account_store_message(product_or_token):
+    token = get_product_token(product_or_token) if isinstance(product_or_token, dict) else str(product_or_token)
+    custom_message = get_account_store_messages().get(token)
+    return custom_message if custom_message else None
+
+
+def set_account_store_message(token, message):
+    messages = get_account_store_messages()
+    if message is None or not str(message).strip():
+        messages.pop(str(token), None)
+    else:
+        messages[str(token)] = str(message)
+    return set_account_store_messages(messages)
+
+
+def delete_account_store_message(token):
+    messages = get_account_store_messages()
+    messages.pop(str(token), None)
+    return set_account_store_messages(messages)
+
+
+def validate_account_store_message_text(text):
+    trimmed = (text or "").strip()
+    if not trimmed:
+        raise ValueError("Account Store message cannot be empty.")
+    placeholders = sorted(set(re.findall(r"\{([a-zA-Z_]+)\}", trimmed)))
+    unknown = [placeholder for placeholder in placeholders if placeholder not in ACCOUNT_STORE_MESSAGE_PLACEHOLDERS]
+    if unknown:
+        allowed = ", ".join(sorted(ACCOUNT_STORE_MESSAGE_PLACEHOLDERS))
+        raise ValueError(
+            f"Unknown placeholder(s): {', '.join(unknown)}. Allowed placeholders: {allowed}."
+        )
+    try:
+        string.Formatter().vformat(trimmed, (), {
+            "country": "",
+            "condition": "",
+            "year": "",
+            "price": "",
+            "price_inr": "",
+            "stock": "",
+            "data_center": "",
+        })
+    except Exception as exc:
+        raise ValueError(f"Invalid message formatting: {exc}") from exc
+    return trimmed
+
+
+def build_account_store_message_values(product):
+    price_inr = int(product.get("price") or 0)
+    category = normalize_optional_text(product.get("category"))
+    data_center = normalize_optional_text(product.get("dc"))
+    raw_stock = product.get("stock")
+    stock = int(raw_stock) if raw_stock is not None else int(get_product_stock(product))
+    return {
+        "country": html.escape(str(product.get("country") or "Unknown")),
+        "condition": html.escape(category),
+        "year": html.escape(str(product.get("year") or "")),
+        "price": f"${to_usd(price_inr):.2f}",
+        "price_inr": str(price_inr),
+        "stock": stock,
+        "data_center": html.escape(data_center or "N/A"),
+        "icon": html.escape(str(product.get("icon") or "")),
+        "category": html.escape(category),
+    }
+
+
+def build_account_store_product_detail_lines(product, stock=None):
+    stock = int(stock if stock is not None else get_product_stock(product))
+    lines = [
+        f"{P_CART} <b>PRODUCT DETAILS</b>",
+        "━━━━━━━━━━━━━━━━━━",
+        "",
+        f"🌍 <b>Country:</b> {html.escape(str(product.get('icon') or ''))} {html.escape(str(product.get('country') or 'Unknown'))}",
+    ]
+    category = normalize_optional_text(product.get("category"))
+    if category:
+        lines.append(f"📌 <b>Type:</b> {html.escape(category)}")
+    dc = normalize_optional_text(product.get("dc"))
+    if dc:
+        lines.append(f"🖥 <b>DC:</b> {html.escape(str(dc))}")
+    if product.get("year"):
+        lines.append(f"📅 <b>Year:</b> {html.escape(str(product['year']))}")
+    lines.extend([
+        "",
+        f"💵 <b>Price:</b> ${to_usd(product['price']):.2f}",
+        f"🇮🇳 <b>Price:</b> {P_INR}{product['price']}",
+        f"{P_PKG} <b>Available:</b> {stock}",
+    ])
+    return lines
+
+
+def render_account_store_product_message(product):
+    stock = get_product_stock(product)
+    custom_message = get_account_store_message(product)
+    if custom_message:
+        values = build_account_store_message_values(product)
+        try:
+            return custom_message.format(**values)
+        except Exception:
+            pass
+    return "\n".join(build_account_store_product_detail_lines(product, stock))
+
+
 def account_store_caption(products, page, total_pages, page_products, flow):
     labels = get_store_buttons(flow)
     product_lines = [format_store_product_line(product) for product in page_products]
@@ -1921,31 +2061,12 @@ async def show_product_details(event, flow, token):
         await event.edit(f"{P_NO} <b>Out of Stock</b>\n\nThis product is no longer available.", buttons=[[Button.inline(get_store_buttons(flow)["back"], f"shop|{flow}|{page}")]])
         return
 
-    lines = [
-        f"{P_CART} <b>PRODUCT DETAILS</b>",
-        "━━━━━━━━━━━━━━━━━━",
-        "",
-        f"🌍 <b>Country:</b> {product['icon']} {html.escape(product['country'])}"
-    ]
-    category = normalize_optional_text(product.get("category"))
-    if category:
-        lines.append(f"📌 <b>Type:</b> {html.escape(category)}")
-    dc = normalize_optional_text(product.get("dc"))
-    if dc:
-        lines.append(f"🖥 <b>DC:</b> {html.escape(str(dc))}")
-    if product.get("year"):
-        lines.append(f"📅 <b>Year:</b> {html.escape(str(product['year']))}")
-    lines.extend([
-        "",
-        f"💵 <b>Price:</b> ${to_usd(product['price']):.2f}",
-        f"🇮🇳 <b>Price:</b> {P_INR}{product['price']}",
-        f"{P_PKG} <b>Available:</b> {stock}"
-    ])
+    message = render_account_store_product_message(product)
     buttons = [
         [Button.inline(get_store_buttons(flow)["buy"], f"pbuy|{flow}|{token}")],
         [Button.inline(get_store_buttons(flow)["back"], f"shop|{flow}|{page}")]
     ]
-    await event.edit("\n".join(lines), buttons=buttons)
+    await event.edit(message, buttons=buttons)
 
 async def show_countries(event, flow, page=1):
     return await render_account_store(event, flow, page, send_banner=not isinstance(event, events.CallbackQuery.Event))
@@ -2497,7 +2618,8 @@ async def admin_panel_handler(event):
         btns.append([Button.inline("📝 Set Welcome Msg", "adm_welcome"), Button.inline("🖼️ Banner Images", "adm_banner")])
         btns.append([Button.inline("📜 Editable T&C", "adm_terms_content")])
         btns.append([Button.inline("📝 Store Messages", "adm_store_messages"), Button.inline("⚙️ Store Buttons", "adm_store_buttons")])
-        btns.append([Button.inline("📦 Account Store Order", "adm_store_order")])
+        btns.append([Button.inline("� Account Store Messages", "adm_account_store_messages")])
+        btns.append([Button.inline("�📦 Account Store Order", "adm_store_order")])
         btns.append([Button.inline("Support URL", "adm_supporturl"), Button.inline("Payments", "adm_payments")])
         btns.append([Button.inline("💳 Payment Methods", "adm_payment_methods")])
         btns.append([Button.inline("👑 Owner", "adm_setting_edit|owner_username")])
@@ -3000,6 +3122,32 @@ async def store_button_editor(event, flow):
     return await event.edit(f"⚙️ <b>{name} Store Buttons</b>\n\nSelect a label to edit.", buttons=rows)
 
 
+async def account_store_messages_menu(event):
+    products = get_available_account_products()
+    buttons = []
+
+    for position, product in enumerate(products, start=1):
+        label = (
+            f"{position}️⃣ {product.get('icon') or ''} "
+            f"{html.escape(str(product.get('country') or 'Unknown'))} • "
+            f"{html.escape(str(product.get('category') or 'Standard'))} • "
+            f"{html.escape(str(product.get('year') or ''))} • "
+            f"${to_usd(product.get('price') or 0):.2f}"
+        )
+        token = get_product_token(product)
+        buttons.append([
+            Button.inline(label, "adm_account_store_messages_noop"),
+            Button.inline("✏️ Edit", f"adm_account_store_message_edit|{token}")
+        ])
+
+    buttons.append([Button.inline("🔙 Back", "adm_adminmain")])
+
+    heading = "📝 <b>Account Store Messages</b>"
+    if not products:
+        heading += "\n\nNo stock groups are currently available."
+    return await event.edit(heading, buttons=buttons)
+
+
 async def account_store_order_menu(event, page=1):
     products = get_available_account_products()
     limit = 10
@@ -3134,6 +3282,40 @@ async def admin_actions(event):
         if not has_perm(uid, 'p_settings'):
             return await event.answer("Not authorized.", alert=True)
         return await payment_methods_menu(event)
+
+    if action_data == "account_store_messages":
+        if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
+            return await event.answer("Not authorized.", alert=True)
+        return await account_store_messages_menu(event)
+
+    if action_data == "account_store_messages_noop":
+        return await event.answer()
+
+    if action_data.startswith("account_store_message_edit|"):
+        if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
+            return await event.answer("Not authorized.", alert=True)
+        token = action_data.split("|", 1)[1]
+        product = resolve_product(token)
+        if not product:
+            return await event.answer("This stock group is no longer available.", alert=True)
+        custom_message = get_account_store_message(token)
+        preview = custom_message or render_account_store_product_message(product)
+        admin_content_state[uid] = {"type": "account_store_message", "token": token}
+        return await event.edit(
+            "✏️ <b>Edit Account Store Message</b>\n\n"
+            f"Current message/card text:\n\n<pre>{html.escape(preview)}</pre>\n\n"
+            "Send the new message text below.\n"
+            "Supported placeholders: {country}, {condition}, {year}, {price}, {price_inr}, {stock}, {data_center}",
+            buttons=[[Button.inline("🔙 Back", "adm_account_store_messages")], [Button.inline("🗑 Clear Custom Message", f"adm_account_store_message_clear|{token}")]],
+        )
+
+    if action_data.startswith("account_store_message_clear|"):
+        if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
+            return await event.answer("Not authorized.", alert=True)
+        token = action_data.split("|", 1)[1]
+        delete_account_store_message(token)
+        await event.answer("Custom Account Store message cleared.", alert=True)
+        return await account_store_messages_menu(event)
 
     if action_data == "store_order":
         if uid not in ADMIN_IDS and not has_perm(uid, "p_settings"):
@@ -4067,6 +4249,17 @@ async def handle_all_messages(e):
                 flow = content_type["flow"]
                 admin_content_state.pop(uid, None)
                 return await e.reply("✅ Store message saved.", buttons=[[Button.inline("↩️ Back", f"adm_store_config|{flow}")]])
+            if isinstance(content_type, dict) and content_type.get("type") == "account_store_message":
+                try:
+                    validated_text = validate_account_store_message_text(text)
+                except ValueError as exc:
+                    return await e.reply(f"❌ {exc}")
+                set_account_store_message(content_type["token"], validated_text)
+                admin_content_state.pop(uid, None)
+                return await e.reply(
+                    "✅ Account Store message updated successfully.",
+                    buttons=[[Button.inline("🔙 Back", "adm_account_store_messages")]],
+                )
             if isinstance(content_type, dict) and content_type.get("type") == "store_button":
                 label = text.strip()
                 if not label or len(label.encode("utf-8")) > 60:
